@@ -1,0 +1,712 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mars Atlas</title>
+
+<!-- CesiumJS (3D globe engine). Version pinned so the demo can't change under you. -->
+<script>window.CESIUM_BASE_URL = "https://cdn.jsdelivr.net/npm/cesium@1.147.0/Build/Cesium/";</script>
+<script src="https://cdn.jsdelivr.net/npm/cesium@1.147.0/Build/Cesium/Cesium.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cesium@1.147.0/Build/Cesium/Widgets/widgets.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:ital,wdth,wght@0,75..100,400..700;1,75..100,400..700&display=swap">
+
+<style>
+  :root {
+    --night: #121826;
+    --night-2: #1a2233;
+    --line: #2c364c;
+    --bone: #ece6d6;
+    --muted: #9aa4b8;
+    --sea: #86e1da;      /* interactive: the complement of Mars' orange, so it reads on the surface */
+    --amber: #f0b45a;    /* human hardware: landing sites */
+    --alert: #ff9d8a;
+    --font: "Archivo", "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: #000; color: var(--bone);
+    font-family: var(--font); font-size: 15px; line-height: 1.45; }
+  #globe { position: fixed; inset: 0; }
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--sea); outline-offset: 2px; }
+  [hidden] { display: none !important; }
+
+  /* Left rail: search, filters, selected place */
+  .rail { position: fixed; top: 16px; left: 16px; width: 330px; max-height: calc(100% - 64px);
+    display: flex; flex-direction: column; gap: 10px; pointer-events: none; z-index: 5; }
+  .rail > * { pointer-events: auto; }
+  .panel { background: rgba(18, 24, 38, .93); border: 1px solid var(--line); border-radius: 10px; }
+
+  .search { padding: 14px 14px 12px; }
+  .title { margin: 0 0 10px; font-size: 21px; font-weight: 600; font-stretch: 82%; letter-spacing: .01em; }
+  .field { position: relative; }
+  .field input { width: 100%; padding: 10px 12px; background: var(--night-2); border: 1px solid var(--line);
+    border-radius: 6px; }
+  .field input::placeholder { color: var(--muted); }
+  .results { list-style: none; margin: 8px 0 0; padding: 0; max-height: 46vh; overflow-y: auto; }
+  .results li { display: flex; justify-content: space-between; gap: 12px; padding: 7px 8px; border-radius: 6px;
+    cursor: pointer; }
+  .results li[aria-selected="true"], .results li:hover { background: var(--night-2); }
+  .results .kind { color: var(--muted); white-space: nowrap; font-size: 13px; }
+  .results .none { color: var(--muted); cursor: default; }
+  .results .none:hover { background: none; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .chip { padding: 4px 10px; font-size: 13px; background: transparent; border: 1px solid var(--line);
+    border-radius: 999px; color: var(--muted); }
+  .chip[aria-pressed="true"] { color: var(--night); background: var(--bone); border-color: var(--bone); }
+  .meta { margin: 12px 0 0; font-size: 13px; color: var(--muted); }
+  .link { background: none; border: 0; padding: 0; color: var(--sea); text-decoration: underline;
+    text-underline-offset: 2px; font-size: inherit; }
+
+  .card { padding: 14px; }
+  .card h2 { margin: 0; font-size: 24px; font-weight: 600; font-stretch: 82%; line-height: 1.15; }
+  .card h2.valley { font-style: italic; }
+  .card .what { margin: 4px 0 0; color: var(--muted); }
+  .card .where { margin: 10px 0 0; font-variant-numeric: tabular-nums; font-size: 17px; }
+  .card .note { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .btn { padding: 8px 10px; font-size: 14px; white-space: nowrap; border-radius: 6px; border: 1px solid var(--line); background: var(--night-2); }
+  .btn.primary { background: var(--sea); border-color: var(--sea); color: #0b2422; font-weight: 600; }
+
+  /* Setup: paste the Cesium ion token */
+  .setup { position: fixed; right: 16px; top: 16px; width: 360px; max-width: calc(100% - 32px); padding: 16px;
+    z-index: 6; }
+  .setup h2 { margin: 0 0 6px; font-size: 19px; font-weight: 600; font-stretch: 82%; }
+  .setup p { margin: 0 0 10px; color: var(--muted); }
+  .setup ol { margin: 0 0 12px; padding-left: 20px; }
+  .setup li { margin-bottom: 4px; }
+  .setup a { color: var(--sea); }
+  .setup input { width: 100%; padding: 10px 12px; background: var(--night-2); border: 1px solid var(--line);
+    border-radius: 6px; margin-bottom: 10px; }
+  .setup .error { color: var(--alert); margin: 0 0 10px; }
+
+  /* Cursor position, like the margin of a map sheet */
+  .readout { position: fixed; right: 16px; bottom: 34px; padding: 6px 10px; font-size: 13px;
+    font-variant-numeric: tabular-nums; color: var(--bone); z-index: 4; pointer-events: none; }
+  .toast { position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); padding: 8px 14px; z-index: 7;
+    max-width: calc(100% - 32px); }
+  .drop { position: fixed; inset: 12px; border: 2px dashed var(--sea); border-radius: 14px; z-index: 8;
+    display: grid; place-items: center; font-size: 20px; background: rgba(18, 24, 38, .7); pointer-events: none; }
+
+  @media (max-width: 720px) {
+    .rail { left: 8px; right: 8px; top: 8px; width: auto; max-height: none; bottom: 34px;
+      justify-content: space-between; }
+    .setup { left: 8px; right: 8px; top: auto; bottom: 34px; width: auto; max-width: none; }
+    .readout { display: none; }
+    .results { max-height: 30vh; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div id="globe"></div>
+
+<div class="rail">
+  <section class="panel search">
+    <h1 class="title">Mars Atlas</h1>
+    <div class="field">
+      <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder="Search a crater, valley, landing site"
+             role="combobox" aria-expanded="false" aria-controls="results" aria-label="Search Mars place names">
+    </div>
+    <ul id="results" class="results" role="listbox" hidden></ul>
+    <div class="chips" id="chips" aria-label="Labels shown on the globe"></div>
+    <p class="meta"><span id="count"></span> <button class="link" id="loadNames">Load all official names</button>
+      <input id="file" type="file" accept=".kmz,.kml,.csv,.tsv,.txt" hidden></p>
+  </section>
+
+  <section class="panel card" id="card" hidden aria-live="polite">
+    <h2 id="cName"></h2>
+    <p class="what" id="cWhat"></p>
+    <p class="where" id="cWhere"></p>
+    <p class="note" id="cNote"></p>
+    <div class="actions">
+      <button class="btn primary" id="fly">Fly here</button>
+      <button class="btn" id="copy">Copy coordinates</button>
+      <button class="btn" id="home">Whole planet</button>
+    </div>
+  </section>
+</div>
+
+<section class="panel setup" id="setup" hidden>
+  <h2>Add Mars imagery and terrain</h2>
+  <p>You are looking at a plain preview sphere. The real surface streams from Cesium ion, which needs a free token.</p>
+  <ol>
+    <li>Sign up at <a href="https://ion.cesium.com/signup" target="_blank" rel="noopener">ion.cesium.com</a>.</li>
+    <li>In Asset Depot, open Cesium Mars and add it to your assets.</li>
+    <li>In Access Tokens, copy your default token and paste it below.</li>
+  </ol>
+  <p class="error" id="setupError" hidden></p>
+  <input id="token" type="password" autocomplete="off" placeholder="Cesium ion access token" aria-label="Cesium ion access token">
+  <div class="actions" style="margin-top:0">
+    <button class="btn primary" id="saveToken">Load Mars</button>
+    <button class="btn" id="skipToken">Keep the preview</button>
+  </div>
+</section>
+
+<div class="panel readout" id="readout" hidden></div>
+<div class="panel toast" id="toast" role="status" hidden></div>
+<div class="drop" id="drop" hidden>Drop the IAU names file to load it</div>
+
+<script>
+"use strict";
+/* ============================================================================
+   Mars Atlas starter
+   - 3D globe: Cesium Mars tileset (ion asset 3644333), needs a free ion token
+   - Place names: a built-in starter set + importer for the full IAU gazetteer
+   - Everything here is one file on purpose, so it is easy to extend:
+       FEATURES ......... the place-name data
+       toCartesian() .... lat/lon -> 3D position (use this for your own layers)
+       flyTo() .......... camera moves
+       addLabels() ...... how markers are drawn
+   ========================================================================== */
+
+const CESIUM_MARS_ASSET_ID = 3644333;
+const TOKEN_KEY = "marsAtlas.ionToken";
+const NAMES_KEY = "marsAtlas.names.v1";
+const MARS_RADIUS = 3396190; // metres, IAU reference radius
+
+/* Feature classes. Label style follows map conventions:
+   regions in spaced capitals, valleys in italics, mountains bold, craters plain. */
+const KINDS = {
+  r: { name: "Regions",       one: "Region",       font: "600 26px",        color: "#ece6d6" },
+  m: { name: "Mountains",     one: "Mountain",     font: "700 26px",        color: "#ece6d6" },
+  v: { name: "Valleys",       one: "Valley",       font: "italic 500 26px", color: "#ece6d6" },
+  c: { name: "Craters",       one: "Crater",       font: "500 24px",        color: "#ece6d6" },
+  s: { name: "Landing sites", one: "Landing site", font: "600 24px",        color: "#f0b45a" },
+};
+
+/* Built-in starter set: [name, kind, latitude (planetocentric, +N), longitude (+E, 0-360), size in km].
+   Typed in by hand from the IAU gazetteer, so treat positions as approximate (about half a degree).
+   Use "Load all official names" for the exact, complete list. */
+const BUILT_IN = [
+  // Regions: plains, highlands, plateaus
+  ["Hellas Planitia","r",-42.4,70.5,2300],["Argyre Planitia","r",-49.8,317,900],["Isidis Planitia","r",13.9,88.3,1225],
+  ["Utopia Planitia","r",46.7,117.5,3560],["Acidalia Planitia","r",49.8,339.3,3360],["Chryse Planitia","r",28.4,319.7,1540],
+  ["Amazonis Planitia","r",25.7,197.1,2800],["Arcadia Planitia","r",47.2,184.3,1900],["Elysium Planitia","r",3,154.7,3000],
+  ["Vastitas Borealis","r",87.7,32.5,2000],["Planum Boreum","r",88,15,1100],["Planum Australe","r",-83.9,160,1450],
+  ["Meridiani Planum","r",0,356.9,1060],["Lunae Planum","r",10.8,294.5,1820],["Solis Planum","r",-26.4,270.3,1810],
+  ["Syria Planum","r",-12.1,256.1,757],["Sinai Planum","r",-13.7,272.2,900],["Daedalia Planum","r",-21.8,232,1800],
+  ["Hesperia Planum","r",-21.4,109.9,1600],["Syrtis Major Planum","r",8.4,69.5,1350],["Tharsis","r",0,260,4000],
+  ["Arabia Terra","r",21.3,5.7,4850],["Noachis Terra","r",-50.4,5.2,5500],["Terra Sabaea","r",2,42,4700],
+  ["Tyrrhena Terra","r",-11.9,88.8,2300],["Terra Cimmeria","r",-32.7,147.8,5400],["Terra Sirenum","r",-39.7,210,3900],
+  ["Aonia Terra","r",-60.2,262.1,3900],["Promethei Terra","r",-57.7,100,3300],["Margaritifer Terra","r",-4.9,335,2600],
+  ["Xanthe Terra","r",1.6,312,1870],["Tempe Terra","r",39.7,289,2000],["Deuteronilus Mensae","r",43.2,23,940],
+  ["Protonilus Mensae","r",43.9,49.4,590],["Nilosyrtis Mensae","r",34.8,67.9,700],["Cydonia Mensae","r",37,347.2,850],
+  ["Olympia Undae","r",81.2,180,1500],["Lycus Sulci","r",29.3,219,1350],
+  // Mountains and volcanoes
+  ["Olympus Mons","m",18.65,226.2,610],["Ascraeus Mons","m",11.9,255.9,460],["Pavonis Mons","m",1.5,247,375],
+  ["Arsia Mons","m",-8.3,239.9,475],["Elysium Mons","m",25,147.2,400],["Alba Mons","m",40.5,250.4,548],
+  ["Hecates Tholus","m",32.1,150.2,183],["Albor Tholus","m",18.9,150.5,158],["Apollinaris Mons","m",-9.2,174.8,275],
+  ["Tharsis Tholus","m",13.3,269.3,155],["Ceraunius Tholus","m",24,262.6,130],["Uranius Tholus","m",26.3,262.4,62],
+  ["Uranius Mons","m",26.9,267.9,274],["Biblis Tholus","m",2.5,235.6,170],["Ulysses Tholus","m",2.9,238.6,100],
+  ["Jovis Tholus","m",18.2,242.6,58],["Hadriacus Mons","m",-31.3,91.9,450],["Tyrrhenus Mons","m",-21.6,105.9,270],
+  ["Aeolis Mons","m",-5.1,137.85,90],["Tharsis Montes","m",1.2,247.4,1840],["Nereidum Montes","m",-37.6,316.8,1130],
+  ["Charitum Montes","m",-58.1,319.7,850],["Libya Montes","m",1.4,88.2,1170],["Phlegra Montes","m",40.4,163.7,1350],
+  ["Hellespontus Montes","m",-44.4,42.8,730],["Orcus Patera","m",14.2,178.6,380],["Nili Patera","m",9,67.2,50],
+  // Valleys, canyons, fractures, chaos terrain
+  ["Valles Marineris","v",-13.9,300.8,3770],["Kasei Valles","v",24.6,294.9,1580],["Ares Vallis","v",10.3,334.4,1700],
+  ["Mawrth Vallis","v",22.4,343,636],["Ma'adim Vallis","v",-22,177.5,825],["Nirgal Vallis","v",-28.2,318,610],
+  ["Tiu Valles","v",16.2,325.2,1720],["Simud Valles","v",19.1,322,945],["Maja Valles","v",12.4,301.5,1510],
+  ["Shalbatana Vallis","v",7.4,317.9,1030],["Nanedi Valles","v",5,311,550],["Mangala Valles","v",-11.3,208.5,828],
+  ["Dao Vallis","v",-37.6,88.9,794],["Harmakhis Vallis","v",-39.2,93.2,475],["Reull Vallis","v",-42.3,104.5,945],
+  ["Athabasca Valles","v",8.6,155,285],["Marte Vallis","v",15,183.5,185],["Uzboi Vallis","v",-29.5,323,366],
+  ["Ladon Valles","v",-22.6,331.1,278],["Nili Fossae","v",22,76.8,667],["Cerberus Fossae","v",11.3,166.4,1235],
+  ["Medusae Fossae","v",-3.2,197,333],["Noctis Labyrinthus","v",-6.4,258.8,1190],["Ius Chasma","v",-7.3,275.5,840],
+  ["Tithonium Chasma","v",-4.6,275.5,810],["Melas Chasma","v",-10.5,287.5,547],["Candor Chasma","v",-6.5,289,773],
+  ["Ophir Chasma","v",-4,287.6,317],["Hebes Chasma","v",-1.1,283.9,319],["Coprates Chasma","v",-13.2,298.7,960],
+  ["Ganges Chasma","v",-8,312,584],["Eos Chasma","v",-12.1,320.7,963],["Juventae Chasma","v",-3.4,298.7,320],
+  ["Echus Chasma","v",1,280.2,100],["Chasma Boreale","v",82.6,312.6,560],["Hydraotes Chaos","v",1,324.6,418],
+  ["Aram Chaos","v",2.5,338.7,277],["Iani Chaos","v",-2.6,342.6,434],["Aureum Chaos","v",-4,333,351],
+  // Craters
+  ["Gale","c",-5.4,137.8,154],["Jezero","c",18.38,77.58,49],["Gusev","c",-14.5,175.4,166],["Endeavour","c",-2.28,354.77,22],
+  ["Victoria","c",-2.05,354.5,0.75],["Airy","c",-5.1,0.1,43],["Eberswalde","c",-24,326.7,65],["Holden","c",-26,326,154],
+  ["Huygens","c",-14,55.6,467],["Schiaparelli","c",-2.7,16.8,459],["Cassini","c",23.4,32.1,408],["Antoniadi","c",21.3,60.8,394],
+  ["Herschel","c",-14.5,129.9,298],["Kepler","c",-46.7,140.9,228],["Newton","c",-40.5,201.9,312],["Copernicus","c",-48.8,191.2,300],
+  ["Lowell","c",-52,278.6,203],["Galle","c",-50.6,329,224],["Lyot","c",50.5,29.3,222],["Lomonosov","c",64.9,350.8,150],
+  ["Korolev","c",72.8,164.5,81],["Milankovic","c",54.5,213.3,118],["Mie","c",48.2,139.6,104],["Newcomb","c",-24.4,1,252],
+  ["Flaugergues","c",-16.8,19.2,235],["Dawes","c",-9.1,38,191],["Tikhonravov","c",13.3,35.9,344],["Henry","c",10.8,23.4,171],
+  ["Pasteur","c",19.3,24.7,116],["Becquerel","c",22.1,352,167],["Crommelin","c",5.1,349.8,114],["Mojave","c",7.5,327,58],
+  ["Zunil","c",7.7,166.2,10.4],["Tooting","c",23.2,207.8,28],["Corinto","c",16.95,141.7,14],["McLaughlin","c",21.9,337.6,91],
+  ["Columbus","c",-29.3,194,119],["Terby","c",-28,74.1,174],["Hale","c",-35.7,323.6,137],["Bakhuysen","c",-23,15.8,153],
+  ["Kaiser","c",-46.2,19.1,207],["Proctor","c",-47.6,29.7,168],["Rabe","c",-43.6,34.8,108],["Russell","c",-54.5,12.4,138],
+  ["Greeley","c",-36.8,3.9,457],["Darwin","c",-56.9,340.8,176],["Ritchey","c",-28.5,309,79],["Oudemans","c",-9.8,268.2,124],
+  ["Pettit","c",12.3,186.1,92],["Nicholson","c",0.2,195.5,102],["Molesworth","c",-27.6,149.3,181],["Mariner","c",-34.7,195.8,170],
+  ["Ptolemaeus","c",-45.9,202.4,165],["Secchi","c",-57.9,102,234],["Moreux","c",41.8,44.4,135],["Cerulli","c",32.2,22,130],
+  ["Curie","c",28.8,355.1,114],["Trouvelot","c",16.2,347,150],["Baldet","c",22.8,65.5,180],["Janssen","c",2.7,37.6,154],
+  ["Schroeter","c",-1.9,55.9,292],["Denning","c",-17.5,33.5,165],
+];
+/* Landing sites are not IAU features; they stay on the map whatever names file is loaded. */
+const LANDING_SITES = [
+  ["Viking 1 lander","s",22.27,312.05,0],["Viking 2 lander","s",47.64,134.29,0],["Mars Pathfinder","s",19.13,326.78,0],
+  ["Spirit rover","s",-14.57,175.47,0],["Opportunity rover","s",-1.95,354.47,0],["Phoenix lander","s",68.22,234.25,0],
+  ["Curiosity rover","s",-4.59,137.44,0],["InSight lander","s",4.5,135.62,0],["Perseverance rover","s",18.44,77.45,0],
+  ["Zhurong rover","s",25.07,109.93,0],
+];
+
+let FEATURES = [];          // [{name, kind, lat, lon, km, exact, key, pos}]
+let namesSource = "built-in";
+const shown = { r: true, m: true, v: true, c: true, s: true };
+const $ = (id) => document.getElementById(id);
+
+/* ---------- Coordinates ---------------------------------------------------
+   Mars names use planetocentric latitude and east longitude. A planetocentric
+   latitude is an angle measured from the planet's centre, so the direction
+   vector is exact whatever ellipsoid the terrain was built on. Use these two
+   helpers for every layer you add (craters, storms, routes). */
+function direction(lat, lon) {
+  const p = Cesium.Math.toRadians(lat), l = Cesium.Math.toRadians(lon);
+  return new Cesium.Cartesian3(Math.cos(p) * Math.cos(l), Math.cos(p) * Math.sin(l), Math.sin(p));
+}
+function toCartesian(lat, lon, height = 0) {
+  const d = direction(lat, lon);
+  const p = Cesium.Ellipsoid.MARS.scaleToGeocentricSurface(d, new Cesium.Cartesian3());
+  return height ? Cesium.Cartesian3.add(p, Cesium.Cartesian3.multiplyByScalar(d, height, d), p) : p;
+}
+function toLatLon(cartesian) {
+  const r = Cesium.Cartesian3.magnitude(cartesian);
+  const lat = Cesium.Math.toDegrees(Math.asin(cartesian.z / r));
+  const lon = (Cesium.Math.toDegrees(Math.atan2(cartesian.y, cartesian.x)) + 360) % 360;
+  return { lat, lon };
+}
+function formatLatLon(lat, lon, digits = 2) {
+  return `${Math.abs(lat).toFixed(digits)}° ${lat >= 0 ? "N" : "S"}, ${lon.toFixed(digits)}° E`;
+}
+const fold = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/['’`.-]/g, "").toLowerCase().trim();
+
+function makeFeature([name, kind, lat, lon, km], exact) {
+  lon = Math.round((((lon % 360) + 360) % 360) * 1e4) / 1e4;
+  return { name, kind, lat, lon, km: km || 0, exact, key: fold(name), pos: toCartesian(lat, lon) };
+}
+function setFeatures(rows, exact, source) {
+  FEATURES = rows.map((r) => makeFeature(r, exact)).concat(LANDING_SITES.map((r) => makeFeature(r, true)));
+  namesSource = source;
+  $("count").textContent = `${FEATURES.length.toLocaleString("en")} places, ${source}.`;
+  $("loadNames").textContent = exact ? "Load a different names file" : "Load all official names";
+}
+
+/* ---------- Globe --------------------------------------------------------- */
+Cesium.Ellipsoid.default = Cesium.Ellipsoid.MARS;   // must run before the Viewer is created
+const savedToken = safeGet(TOKEN_KEY);
+if (savedToken) Cesium.Ion.defaultAccessToken = savedToken;
+
+const viewer = new Cesium.Viewer("globe", {
+  globe: false,               // the Mars tileset is the globe
+  baseLayer: false,
+  skyAtmosphere: false,       // the default atmosphere is Earth's blue
+  baseLayerPicker: false, geocoder: false, homeButton: false, sceneModePicker: false,
+  navigationHelpButton: false, animation: false, timeline: false, fullscreenButton: false,
+  infoBox: false, selectionIndicator: false,
+});
+const scene = viewer.scene, camera = viewer.camera;
+scene.screenSpaceCameraController.minimumZoomDistance = 500;
+scene.screenSpaceCameraController.maximumZoomDistance = 4e7;
+viewer.cesiumWidget.screenSpaceEventHandler.removeInputAction(Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
+
+/* Preview sphere + graticule: shown until the real surface loads, and a fallback if the network fails on stage. */
+const preview = scene.primitives.add(new Cesium.Primitive({
+  geometryInstances: new Cesium.GeometryInstance({
+    geometry: new Cesium.EllipsoidGeometry({
+      radii: new Cesium.Cartesian3(MARS_RADIUS - 2000, MARS_RADIUS - 2000, MARS_RADIUS - 2000),
+      vertexFormat: Cesium.PerInstanceColorAppearance.VERTEX_FORMAT, stackPartitions: 96, slicePartitions: 192,
+    }),
+    attributes: { color: Cesium.ColorGeometryInstanceAttribute.fromColor(Cesium.Color.fromCssColorString("#8f5238")) },
+  }),
+  appearance: new Cesium.PerInstanceColorAppearance({ flat: true, translucent: false }),
+  asynchronous: false,
+}));
+const graticule = scene.primitives.add(new Cesium.PolylineCollection());
+(function drawGraticule() {
+  const material = Cesium.Material.fromType("Color", { color: Cesium.Color.fromCssColorString("#ece6d6").withAlpha(0.22) });
+  for (let lat = -60; lat <= 60; lat += 30) {
+    const pts = []; for (let lon = 0; lon <= 360; lon += 3) pts.push(toCartesian(lat, lon));
+    graticule.add({ positions: pts, width: lat === 0 ? 1.6 : 1, material });
+  }
+  for (let lon = 0; lon < 360; lon += 30) {
+    const pts = []; for (let lat = -85; lat <= 85; lat += 3) pts.push(toCartesian(lat, lon));
+    graticule.add({ positions: pts, width: lon === 0 ? 1.6 : 1, material });
+  }
+})();
+
+let marsTileset = null;
+async function loadMars(token) {
+  Cesium.Ion.defaultAccessToken = token;
+  const tileset = await Cesium.Cesium3DTileset.fromIonAssetId(CESIUM_MARS_ASSET_ID, { enableCollision: true });
+  if (marsTileset) scene.primitives.remove(marsTileset);
+  marsTileset = scene.primitives.add(tileset);
+  scene.primitives.lowerToBottom(marsTileset);
+  preview.show = false; graticule.show = false;
+  let warned = false;
+  tileset.tileFailed.addEventListener((e) => {
+    if (warned) return; warned = true;
+    toast("Some Mars tiles failed to load. Check your connection. " + (e && e.message ? e.message : ""), 7000);
+  });
+}
+
+/* ---------- Labels -------------------------------------------------------- */
+const labels = scene.primitives.add(new Cesium.LabelCollection({ scene }));
+const points = scene.primitives.add(new Cesium.PointPrimitiveCollection());
+let marks = [];             // parallel to FEATURES: {label, point}
+let selected = -1;
+const OUTLINE = Cesium.Color.fromCssColorString("#0d111b");
+const SELECTED = Cesium.Color.fromCssColorString("#86e1da");
+let labelFamily = "sans-serif";
+
+/* Big features label from orbit, small ones only once you are close. */
+function labelRange(f) {
+  if (f.kind === "s") return 6e6;
+  // Valleys are long but thin, so they earn their label later than a crater of the same length.
+  return Cesium.Math.clamp(f.km * (f.kind === "v" ? 9e3 : 24e3), 4.5e5, 5e7);
+}
+function labelText(f) {
+  // Regions are set in spaced capitals, the way areas are named on printed maps.
+  return f.kind === "r" ? f.name.toUpperCase().split("").join(" ") : f.name;
+}
+function addLabels() {
+  labels.removeAll(); points.removeAll(); marks = []; selected = -1;
+  FEATURES.forEach((f, i) => {
+    const kind = KINDS[f.kind], color = Cesium.Color.fromCssColorString(kind.color);
+    const range = new Cesium.DistanceDisplayCondition(0, labelRange(f));
+    const label = labels.add({
+      position: f.pos, text: labelText(f), id: { feature: i },
+      font: `${kind.font} ${labelFamily}`, scale: 0.5,
+      fillColor: color, outlineColor: OUTLINE, outlineWidth: 5, style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+      horizontalOrigin: Cesium.HorizontalOrigin.CENTER, verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+      pixelOffset: new Cesium.Cartesian2(0, -8),
+      distanceDisplayCondition: range, disableDepthTestDistance: Number.POSITIVE_INFINITY,
+    });
+    const point = points.add({
+      position: f.pos, id: { feature: i }, pixelSize: f.kind === "s" ? 8 : 5,
+      color, outlineColor: OUTLINE, outlineWidth: 2,
+      distanceDisplayCondition: range, disableDepthTestDistance: Number.POSITIVE_INFINITY,
+    });
+    marks.push({ label, point });
+  });
+}
+/* Labels ignore the depth test so mountains never bury them; this hides the ones on the far side instead. */
+scene.preRender.addEventListener(() => {
+  const occluder = new Cesium.EllipsoidalOccluder(Cesium.Ellipsoid.MARS, camera.positionWC);
+  for (let i = 0; i < marks.length; i++) {
+    const f = FEATURES[i];
+    const visible = (shown[f.kind] || i === selected) && occluder.isPointVisible(f.pos);
+    marks[i].label.show = visible; marks[i].point.show = visible;
+  }
+});
+
+/* ---------- Camera -------------------------------------------------------- */
+function flyHome(duration = 1.8) {
+  camera.flyTo({ destination: toCartesian(8, 300, 1.15e7), duration });
+}
+function flyTo(f, duration = 2.4) {
+  const size = Math.max(f.km, 1) * 1000;
+  const range = Cesium.Math.clamp(size * 1.7, 6e4, 9e6);
+  const pitch = range > 1.5e6 ? -90 : -52;      // look straight down on continent-sized features
+  camera.flyToBoundingSphere(new Cesium.BoundingSphere(f.pos, size / 2), {
+    duration, offset: new Cesium.HeadingPitchRange(0, Cesium.Math.toRadians(pitch), range),
+  });
+}
+
+/* ---------- Selecting a place --------------------------------------------- */
+function describe(f) {
+  const kind = KINDS[f.kind].one;
+  if (!f.km) return kind;
+  const size = f.km >= 10 ? Math.round(f.km).toLocaleString("en") : f.km;
+  return `${kind}, ${size} km ${f.kind === "c" || f.kind === "m" ? "across" : "long or wide"}`;
+}
+function select(i, fly = true) {
+  if (selected >= 0 && marks[selected]) restyle(selected, false);
+  selected = i;
+  if (i < 0) { $("card").hidden = true; return; }
+  const f = FEATURES[i];
+  restyle(i, true);
+  $("cName").textContent = f.name;
+  $("cName").className = f.kind === "v" ? "valley" : "";
+  $("cWhat").textContent = describe(f);
+  $("cWhere").textContent = formatLatLon(f.lat, f.lon);
+  $("cNote").textContent = f.exact ? "" : "Position is approximate. Load the official names for exact coordinates.";
+  $("cNote").hidden = f.exact;
+  $("card").hidden = false;
+  if (fly) flyTo(f);
+}
+function restyle(i, on) {
+  const f = FEATURES[i], m = marks[i], base = Cesium.Color.fromCssColorString(KINDS[f.kind].color);
+  const range = on ? undefined : new Cesium.DistanceDisplayCondition(0, labelRange(f));
+  m.label.fillColor = on ? SELECTED : base; m.label.distanceDisplayCondition = range;
+  m.point.color = on ? SELECTED : base; m.point.distanceDisplayCondition = range;
+  m.point.pixelSize = on ? 11 : (f.kind === "s" ? 8 : 5);
+}
+
+const handler = new Cesium.ScreenSpaceEventHandler(scene.canvas);
+const featureAt = (position) => {
+  const hit = scene.pick(position);
+  return hit && hit.id && Number.isInteger(hit.id.feature) ? hit.id.feature : -1;
+};
+handler.setInputAction((e) => { const i = featureAt(e.position); if (i >= 0) select(i); }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+/* Cursor position readout (and a pointer cursor over labels), at most once per frame. */
+let pendingMove = null;
+handler.setInputAction((e) => {
+  if (pendingMove) { pendingMove = e.endPosition; return; }
+  pendingMove = e.endPosition;
+  requestAnimationFrame(() => {
+    const at = pendingMove; pendingMove = null;
+    let world;
+    if (marsTileset && scene.pickPositionSupported) { try { world = scene.pickPosition(at); } catch (_) {} }
+    if (!Cesium.defined(world)) world = camera.pickEllipsoid(at, Cesium.Ellipsoid.MARS);
+    const box = $("readout");
+    if (Cesium.defined(world)) { const p = toLatLon(world); box.textContent = formatLatLon(p.lat, p.lon); box.hidden = false; }
+    else box.hidden = true;
+    scene.canvas.style.cursor = featureAt(at) >= 0 ? "pointer" : "";
+  });
+}, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+
+/* ---------- Search -------------------------------------------------------- */
+const q = $("q"), list = $("results");
+let matches = [], active = 0;
+function search(text) {
+  const needle = fold(text);
+  if (!needle) return [];
+  const scored = [];
+  FEATURES.forEach((f, i) => {
+    const at = f.key.indexOf(needle);
+    if (at < 0) return;
+    const rank = f.key === needle ? -1 : at === 0 ? 0 : f.key[at - 1] === " " ? 1 : 2;
+    scored.push({ i, rank, f });
+  });
+  scored.sort((a, b) => a.rank - b.rank || b.f.km - a.f.km || a.f.name.localeCompare(b.f.name));
+  return scored.slice(0, 8).map((s) => s.i);
+}
+function renderResults() {
+  list.textContent = "";
+  const open = q.value.trim() !== "";
+  list.hidden = !open; q.setAttribute("aria-expanded", String(open));
+  if (!open) return;
+  if (!matches.length) {
+    const li = document.createElement("li"); li.className = "none";
+    li.textContent = namesSource === "built-in"
+      ? "No match in the starter set. Load all official names to search everything."
+      : "No place with that name.";
+    list.append(li); return;
+  }
+  matches.forEach((i, n) => {
+    const f = FEATURES[i], li = document.createElement("li");
+    li.setAttribute("role", "option"); li.setAttribute("aria-selected", String(n === active));
+    const name = document.createElement("span"); name.textContent = f.name;
+    const kind = document.createElement("span"); kind.className = "kind"; kind.textContent = KINDS[f.kind].one;
+    li.append(name, kind);
+    li.addEventListener("mousedown", (e) => { e.preventDefault(); choose(i); });
+    list.append(li);
+  });
+}
+function choose(i) { q.value = FEATURES[i].name; matches = []; list.hidden = true; q.setAttribute("aria-expanded", "false"); select(i); q.blur(); }
+q.addEventListener("input", () => { matches = search(q.value); active = 0; renderResults(); });
+q.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    if (!matches.length) return;
+    e.preventDefault(); active = (active + (e.key === "ArrowDown" ? 1 : matches.length - 1)) % matches.length; renderResults();
+  } else if (e.key === "Enter" && matches.length) { e.preventDefault(); choose(matches[active]); }
+  else if (e.key === "Escape") { q.value = ""; matches = []; renderResults(); q.blur(); }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "/" && !/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)) { e.preventDefault(); q.focus(); q.select(); }
+});
+
+/* ---------- Label filters ------------------------------------------------- */
+Object.entries(KINDS).forEach(([key, kind]) => {
+  const b = document.createElement("button");
+  b.className = "chip"; b.textContent = kind.name; b.setAttribute("aria-pressed", "true");
+  b.addEventListener("click", () => { shown[key] = !shown[key]; b.setAttribute("aria-pressed", String(shown[key])); });
+  $("chips").append(b);
+});
+
+$("fly").addEventListener("click", () => selected >= 0 && flyTo(FEATURES[selected]));
+$("home").addEventListener("click", () => flyHome());
+$("copy").addEventListener("click", async () => {
+  if (selected < 0) return;
+  const f = FEATURES[selected], text = `${f.lat.toFixed(4)}, ${f.lon.toFixed(4)}`;
+  try { await navigator.clipboard.writeText(text); toast(`Copied ${text} (latitude, east longitude)`); }
+  catch (_) { toast(text); }
+});
+
+/* ---------- Loading the full IAU gazetteer --------------------------------
+   Get the file from planetarynames.wr.usgs.gov: Mars > GIS Downloads (KMZ),
+   or Advanced Search > Mars > export as CSV. Both are read here. */
+function kindFromType(type, name) {
+  const t = fold(`${type || ""}`), words = fold(name).split(" ");
+  const has = (list, s) => list.some((w) => s.includes(w));
+  const mountain = ["mons", "montes", "tholus", "tholi", "patera", "paterae", "dorsum", "dorsa", "collis", "colles", "rupes", "scopulus"];
+  const valley = ["vallis", "valles", "chasma", "chasmata", "fossa", "fossae", "labyrinthus", "chaos", "catena", "catenae", "cavus", "cavi", "sulcus", "sulci"];
+  const region = ["planitia", "planum", "terra", "mensa", "mensae", "unda", "undae", "vastitas", "palus", "lingula", "serpens", "albedo"];
+  if (t.includes("crater")) return "c";
+  if (has(mountain, t) || words.some((w) => mountain.includes(w))) return "m";
+  if (has(valley, t) || words.some((w) => valley.includes(w))) return "v";
+  if (has(region, t) || words.some((w) => region.includes(w))) return "r";
+  return words.length === 1 ? "c" : "r";   // on Mars, a single-word IAU name is a crater
+}
+function parseCsv(text) {
+  const delimiter = text.slice(0, text.indexOf("\n") + 1 || undefined).includes("\t") ? "\t" : ",";
+  const rows = []; let row = [], cell = "", quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quoted) { if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else quoted = false; } else cell += ch; }
+    else if (ch === '"') quoted = true;
+    else if (ch === delimiter) { row.push(cell); cell = ""; }
+    else if (ch === "\n" || ch === "\r") { if (ch === "\r" && text[i + 1] === "\n") i++; row.push(cell); cell = ""; if (row.some((c) => c !== "")) rows.push(row); row = []; }
+    else cell += ch;
+  }
+  row.push(cell); if (row.some((c) => c !== "")) rows.push(row);
+  if (rows.length < 2) throw new Error("The file has no rows.");
+  const head = rows[0].map((h) => h.replace(/^﻿/, "").toLowerCase().replace(/[^a-z]+/g, " ").trim());
+  const find = (...tests) => { for (const t of tests) { const i = head.findIndex((h) => t.test(h)); if (i >= 0) return i; } return -1; };
+  const cName = find(/^feature name$/, /^name$/, /^clean feature name$/, /name/);
+  const cLat = find(/center.*lat/, /^lat/, /lat/), cLon = find(/center.*lon/, /^lon/, /lon/);
+  const cKm = find(/diam/), cType = find(/feature type$/, /^type$/, /type/), cTarget = find(/^target$/);
+  if (cName < 0 || cLat < 0 || cLon < 0) throw new Error("Could not find name, latitude and longitude columns. Columns seen: " + rows[0].join(", "));
+  const out = [];
+  for (const r of rows.slice(1)) {
+    if (cTarget >= 0 && r[cTarget] && !/mars/i.test(r[cTarget])) continue;
+    const lat = parseFloat(r[cLat]), lon = parseFloat(r[cLon]), name = (r[cName] || "").trim();
+    if (!name || !isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90) continue;
+    const km = cKm >= 0 ? parseFloat(r[cKm]) || 0 : 0;
+    out.push([name, kindFromType(cType >= 0 ? r[cType] : "", name), lat, lon, km]);
+  }
+  return out;
+}
+function parseKml(text) {
+  const doc = new DOMParser().parseFromString(text, "application/xml");
+  if (doc.getElementsByTagName("parsererror").length) throw new Error("The KML file could not be read.");
+  const first = (el, tag) => { const n = el.getElementsByTagNameNS("*", tag)[0]; return n ? n.textContent.trim() : ""; };
+  const out = [];
+  for (const pm of doc.getElementsByTagNameNS("*", "Placemark")) {
+    const name = first(pm, "name"), coords = first(pm, "coordinates").split(/\s+/)[0].split(",").map(Number);
+    if (!name || coords.length < 2 || !isFinite(coords[0]) || !isFinite(coords[1])) continue;
+    const fields = {};
+    for (const d of [...pm.getElementsByTagNameNS("*", "Data"), ...pm.getElementsByTagNameNS("*", "SimpleData")]) {
+      const value = d.localName === "Data" ? first(d, "value") : d.textContent.trim();
+      fields[(d.getAttribute("name") || "").toLowerCase()] = value;
+    }
+    const pickField = (re) => { const k = Object.keys(fields).find((key) => re.test(key)); return k ? fields[k] : ""; };
+    const info = first(pm, "description").replace(/<[^>]+>/g, " ");
+    const km = parseFloat(pickField(/diam/)) || parseFloat((info.match(/diameter[^0-9]{0,20}([\d.]+)/i) || [])[1]) || 0;
+    const type = pickField(/type/) || (info.match(/feature type[^a-z]{0,10}([a-z ,]+)/i) || [])[1] || "";
+    out.push([name, kindFromType(type, name), coords[1], coords[0], km]);
+  }
+  return out;
+}
+/* A KMZ is a zip holding one KML. This reads it with the browser's own decompressor, no library needed. */
+async function kmlFromKmz(buffer) {
+  const view = new DataView(buffer), bytes = new Uint8Array(buffer);
+  let end = -1;
+  for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 66000); i--) if (view.getUint32(i, true) === 0x06054b50) { end = i; break; }
+  if (end < 0) throw new Error("This is not a KMZ (zip) file.");
+  let at = view.getUint32(end + 16, true);
+  const count = view.getUint16(end + 10, true), decoder = new TextDecoder();
+  for (let n = 0; n < count && view.getUint32(at, true) === 0x02014b50; n++) {
+    const method = view.getUint16(at + 10, true), size = view.getUint32(at + 20, true);
+    const nameLen = view.getUint16(at + 28, true), extraLen = view.getUint16(at + 30, true), commentLen = view.getUint16(at + 32, true);
+    const local = view.getUint32(at + 42, true), fileName = decoder.decode(bytes.subarray(at + 46, at + 46 + nameLen));
+    if (/\.kml$/i.test(fileName)) {
+      const start = local + 30 + view.getUint16(local + 26, true) + view.getUint16(local + 28, true);
+      const data = bytes.subarray(start, start + size);
+      if (method === 0) return decoder.decode(data);
+      if (method !== 8) throw new Error("Unsupported compression in the KMZ file.");
+      const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+      return await new Response(stream).text();
+    }
+    at += 46 + nameLen + extraLen + commentLen;
+  }
+  throw new Error("No KML found inside the KMZ file.");
+}
+async function loadNamesFile(file) {
+  try {
+    let rows;
+    if (/\.kmz$/i.test(file.name)) rows = parseKml(await kmlFromKmz(await file.arrayBuffer()));
+    else if (/\.kml$/i.test(file.name)) rows = parseKml(await file.text());
+    else rows = parseCsv(await file.text());
+    if (rows.length < 5) throw new Error("Only " + rows.length + " places found in that file.");
+    select(-1, false);
+    setFeatures(rows, true, "from " + file.name);
+    addLabels();
+    safeSet(NAMES_KEY, JSON.stringify({ source: "from " + file.name, rows }));
+    toast(`${rows.length.toLocaleString("en")} names loaded from ${file.name}.`);
+  } catch (err) {
+    toast("Names not loaded. " + err.message, 8000);
+  }
+}
+$("loadNames").addEventListener("click", () => $("file").click());
+$("file").addEventListener("change", (e) => { if (e.target.files[0]) loadNamesFile(e.target.files[0]); e.target.value = ""; });
+let dragDepth = 0;
+window.addEventListener("dragenter", (e) => { e.preventDefault(); dragDepth++; $("drop").hidden = false; });
+window.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; $("drop").hidden = true; } });
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", (e) => {
+  e.preventDefault(); dragDepth = 0; $("drop").hidden = true;
+  if (e.dataTransfer.files[0]) loadNamesFile(e.dataTransfer.files[0]);
+});
+
+/* ---------- Token setup --------------------------------------------------- */
+function safeGet(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }
+function safeSet(key, value) { try { localStorage.setItem(key, value); } catch (_) {} }
+function safeRemove(key) { try { localStorage.removeItem(key); } catch (_) {} }
+let toastTimer;
+function toast(message, ms = 3500) {
+  const t = $("toast"); t.textContent = message; t.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), ms);
+}
+function explain(err) {
+  const code = err && (err.statusCode || (err.response && err.response.status));
+  if (code === 401) return "Cesium ion rejected the token. Copy it again from Access Tokens.";
+  if (code === 404 || code === 403) return "The token works, but Cesium Mars is not in your assets yet. Add it from Asset Depot (step 2).";
+  return "Mars did not load. Check your connection and the token. " + (err && err.message ? err.message : "");
+}
+async function tryToken(token) {
+  const button = $("saveToken"), error = $("setupError");
+  button.disabled = true; button.textContent = "Loading Mars…"; error.hidden = true;
+  try {
+    await loadMars(token);
+    safeSet(TOKEN_KEY, token);
+    $("setup").hidden = true;
+  } catch (err) {
+    error.textContent = explain(err); error.hidden = false; $("setup").hidden = false;
+  } finally {
+    button.disabled = false; button.textContent = "Load Mars";
+  }
+}
+$("saveToken").addEventListener("click", () => {
+  const token = $("token").value.trim();
+  if (!token) { $("setupError").textContent = "Paste your token first."; $("setupError").hidden = false; return; }
+  tryToken(token);
+});
+$("token").addEventListener("keydown", (e) => { if (e.key === "Enter") $("saveToken").click(); });
+$("skipToken").addEventListener("click", () => { $("setup").hidden = true; toast("Preview mode. Reload the page to add a token later."); });
+
+/* ---------- Start --------------------------------------------------------- */
+(async function start() {
+  let stored = null;
+  try { stored = JSON.parse(safeGet(NAMES_KEY) || "null"); } catch (_) { safeRemove(NAMES_KEY); }
+  if (stored && Array.isArray(stored.rows) && stored.rows.length) setFeatures(stored.rows, true, stored.source);
+  else setFeatures(BUILT_IN, false, "built-in");
+
+  camera.setView({ destination: toCartesian(8, 300, 1.15e7) });
+  // Labels are drawn with the page font, so wait briefly for it; fall back to the system font offline.
+  try {
+    await Promise.race([
+      Promise.all([document.fonts.load('600 26px "Archivo"'), document.fonts.load('italic 500 26px "Archivo"')]),
+      new Promise((resolve) => setTimeout(resolve, 1500)),
+    ]);
+    if (document.fonts.check('600 26px "Archivo"')) labelFamily = '"Archivo", sans-serif';
+  } catch (_) {}
+  addLabels();
+
+  if (savedToken) { $("token").value = savedToken; tryToken(savedToken); }
+  else $("setup").hidden = false;
+})();
+
+/* Handy in the browser console while you build: atlas.flyTo(atlas.features()[0]) */
+window.atlas = { viewer, toCartesian, toLatLon, flyTo, flyHome, select, features: () => FEATURES };
+</script>
+</body>
+</html>
